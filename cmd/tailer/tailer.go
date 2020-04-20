@@ -1,4 +1,4 @@
-// Copyright 2016-2018 The grok_exporter Authors
+// Copyright 2019 Robert Cowham, Perforce Software
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@ import (
 )
 
 var (
-	logpath = flag.String("logpath", "", "Path to the file to tail.")
+	logpath = flag.String("logpath", "", "Path to the p4d log file to tail.")
 )
 
 type myConfig struct {
@@ -94,7 +94,5 @@ func startTailer(cfgInput *myConfig) (fswatcher.FileTailer, error) {
 	default:
 		return nil, fmt.Errorf("Config error: Input type '%v' unknown.", cfgInput.Type)
 	}
-	// bufferLoadMetric := exporter.NewBufferLoadMetric(logger, cfgInput.MaxLinesInBuffer > 0)
-	// return tailer.BufferedTailerWithMetrics(tail, bufferLoadMetric, logger, cfgInput.MaxLinesInBuffer), nil
 	return tail, nil
 }
