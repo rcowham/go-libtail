@@ -21,7 +21,6 @@ import (
 	"path/filepath"
 	"time"
 
-	//"github.com/prometheus/common/log"
 	"github.com/prometheus/common/log"
 	"github.com/rcowham/go-libtail/tailer/glob"
 	"github.com/sirupsen/logrus"
