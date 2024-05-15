@@ -1,4 +1,4 @@
-// Copyright 2018 The grok_exporter Authors
+// Copyright 2018-2020 The grok_exporter Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -33,7 +33,7 @@ func Parse(pattern string) (Glob, error) {
 	}
 	absglob, err = filepath.Abs(pattern)
 	if err != nil {
-		return "", fmt.Errorf("%q: failed to finnd absolute path for glob pattern: %v", pattern, err)
+		return "", fmt.Errorf("%q: failed to find absolute path for glob pattern: %v", pattern, err)
 	}
 	result = Glob(absglob)
 	if containsWildcards(result.Dir()) {
@@ -71,7 +71,7 @@ func containsWildcards(pattern string) bool {
 			continue
 		}
 		if !escaped && (p[i] == '[' || p[i] == '*' || p[i] == '?') {
-			return false
+			return true
 		}
 		escaped = false
 	}

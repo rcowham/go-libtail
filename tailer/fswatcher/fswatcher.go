@@ -33,8 +33,9 @@ type FileTailer interface {
 }
 
 type Line struct {
-	Line string
-	File string
+	Line  string
+	File  string
+	Extra interface{}
 }
 
 // ideas how this might look like in the config file:
@@ -230,7 +231,6 @@ func (t *fileTailer) shutdown() {
 
 func (t *fileTailer) watchDirs(log logrus.FieldLogger) Error {
 	var (
-		err      error
 		Err      Error
 		dirPaths []string
 		dirPath  string
@@ -242,7 +242,7 @@ func (t *fileTailer) watchDirs(log logrus.FieldLogger) Error {
 	for _, dirPath = range dirPaths {
 		log.Debugf("watching directory %v", dirPath)
 		dir, Err := t.osSpecific.watchDir(dirPath)
-		if err != nil {
+		if Err != nil {
 			return Err
 		}
 		t.watchedDirs = append(t.watchedDirs, dir)
@@ -302,17 +302,17 @@ func (t *fileTailer) syncFilesInDir(dir *Dir, readall bool, log logrus.FieldLogg
 			}
 			continue
 		}
-		newFile, err := open(filePath)
-		if err != nil {
-			if os.IsNotExist(err) {
+		newFile, Err := open(filePath)
+		if Err != nil {
+			if Err.Type() == FileNotFound {
 				fileLogger.Debug("skipping, because file does no longer exist")
 				continue
 			} else {
-				return NewErrorf(NotSpecified, err, "%v: failed to open file", filePath)
+				return Err
 			}
 		}
 		if !readall {
-			_, err = newFile.Seek(0, io.SeekEnd)
+			_, err := newFile.Seek(0, io.SeekEnd)
 			if err != nil {
 				newFile.Close()
 				return NewError(NotSpecified, os.NewSyscallError("seek", err), filePath)
@@ -372,7 +372,7 @@ func (t *fileTailer) readNewLines(file *fileWithReader, log logrus.FieldLogger) 
 func (t *fileTailer) checkMissingFile() Error {
 OUTER:
 	for _, g := range t.globs {
-		for watchedFileName, _ := range t.watchedFiles {
+		for watchedFileName := range t.watchedFiles {
 			if g.Match(watchedFileName) {
 				continue OUTER
 			}

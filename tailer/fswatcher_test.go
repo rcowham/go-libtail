@@ -16,10 +16,9 @@ package tailer
 
 import (
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"os/user"
-	"path"
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
@@ -218,7 +217,7 @@ func TestVisibleInOSXFinder(t *testing.T) {
 	if err != nil {
 		fatalf(t, ctx, "failed to get current user: %v", err)
 	}
-	testDir, err := ioutil.TempDir(currentUser.HomeDir, "grok_exporter_test_dir_")
+	testDir, err := io.TempDir(currentUser.HomeDir, "grok_exporter_test_dir_")
 	if err != nil {
 		fatalf(t, ctx, "failed to create test directory: %v", err.Error())
 	}
@@ -385,7 +384,7 @@ func exec(t *testing.T, ctx *context, cmd []string) {
 	case "log":
 		writer, exists := ctx.logFileWriters[cmd[2]]
 		if !exists {
-			writer = newLogFileWriter(t, ctx, path.Join(ctx.basedir, cmd[2]))
+			writer = newLogFileWriter(t, ctx, filepath.Join(ctx.basedir, cmd[2]))
 			ctx.logFileWriters[cmd[2]] = writer
 		}
 		writer.writeLine(t, ctx, cmd[1])
@@ -407,7 +406,7 @@ func exec(t *testing.T, ctx *context, cmd []string) {
 }
 
 func rotate(t *testing.T, ctx *context, from string, to string) {
-	fullpath := path.Join(ctx.basedir, from)
+	fullpath := filepath.Join(ctx.basedir, from)
 	fromDir := filepath.Dir(fullpath)
 	filenameFrom := filepath.Base(fullpath)
 	filesBefore := ls(t, ctx, fromDir)
@@ -447,7 +446,7 @@ func rotate(t *testing.T, ctx *context, from string, to string) {
 }
 
 func ls(t *testing.T, ctx *context, path string) []os.FileInfo {
-	result, err := ioutil.ReadDir(path)
+	result, err := io.ReadDir(path)
 	if err != nil {
 		fatalf(t, ctx, "%v: Failed to list directory: %v", path, err.Error())
 	}
@@ -464,7 +463,7 @@ func containsFile(files []os.FileInfo, filename string) bool {
 }
 
 func moveOrFail(t *testing.T, ctx *context, from, to string) {
-	fromPath := path.Join(ctx.basedir, from)
+	fromPath := filepath.Join(ctx.basedir, from)
 	fromDir := filepath.Dir(fromPath)
 	fromFilename := filepath.Base(fromPath)
 	switch {
@@ -495,8 +494,8 @@ func filenames(fileInfos []os.FileInfo) []string {
 }
 
 func mvOrFail(t *testing.T, ctx *context, from, to string) {
-	fromPath := path.Join(ctx.basedir, from)
-	toPath := path.Join(ctx.basedir, to)
+	fromPath := filepath.Join(ctx.basedir, from)
+	toPath := filepath.Join(ctx.basedir, to)
 	err := os.Rename(fromPath, toPath)
 	if err != nil {
 		fatalf(t, ctx, "%v: Failed to mv file: %v", fromPath, err.Error())
@@ -504,20 +503,20 @@ func mvOrFail(t *testing.T, ctx *context, from, to string) {
 }
 
 func cpOrFail(t *testing.T, ctx *context, from, to string) {
-	fromPath := path.Join(ctx.basedir, from)
-	toPath := path.Join(ctx.basedir, to)
-	data, err := ioutil.ReadFile(fromPath)
+	fromPath := filepath.Join(ctx.basedir, from)
+	toPath := filepath.Join(ctx.basedir, to)
+	data, err := io.ReadFile(fromPath)
 	if err != nil {
 		fatalf(t, ctx, "%v: Copy failed, cannot read file: %v", fromPath, err.Error())
 	}
-	err = ioutil.WriteFile(toPath, data, 0644)
+	err = io.WriteFile(toPath, data, 0644)
 	if err != nil {
 		fatalf(t, ctx, "%v: Copy failed, cannot write file: %v", toPath, err.Error())
 	}
 }
 
 func rmOrFail(t *testing.T, ctx *context, from string) {
-	fromPath := path.Join(ctx.basedir, from)
+	fromPath := filepath.Join(ctx.basedir, from)
 	err := os.Remove(fromPath)
 	if err != nil {
 		fatalf(t, ctx, "%v: Remove failed: %v", fromPath, err.Error())
@@ -525,7 +524,7 @@ func rmOrFail(t *testing.T, ctx *context, from string) {
 }
 
 func createOrFail(t *testing.T, ctx *context, from string) {
-	fromPath := path.Join(ctx.basedir, from)
+	fromPath := filepath.Join(ctx.basedir, from)
 	dir := filepath.Dir(fromPath)
 	filename := filepath.Base(fromPath)
 	filesBeforeCreate := ls(t, ctx, dir)
@@ -547,14 +546,14 @@ func createOrFail(t *testing.T, ctx *context, from string) {
 }
 
 func createFromTemp(t *testing.T, ctx *context, from string) {
-	fromPath := path.Join(ctx.basedir, from)
+	fromPath := filepath.Join(ctx.basedir, from)
 	dir := filepath.Dir(fromPath)
 	filename := filepath.Base(fromPath)
 	filesBeforeCreate := ls(t, ctx, dir)
 	if containsFile(filesBeforeCreate, filename) {
 		fatalf(t, ctx, "%v contains file %v before create.", dir, filename)
 	}
-	tmpFile, err := ioutil.TempFile(dir, "logrotate_temp.")
+	tmpFile, err := io.TempFile(dir, "logrotate_temp.")
 	if err != nil {
 		fatalf(t, ctx, "failed to create temporary log file in %v: %v", dir, err.Error())
 	}
@@ -574,7 +573,7 @@ func createFromTemp(t *testing.T, ctx *context, from string) {
 }
 
 func truncateOrFail(t *testing.T, ctx *context, from string) {
-	fromPath := path.Join(ctx.basedir, from)
+	fromPath := filepath.Join(ctx.basedir, from)
 	err := os.Truncate(fromPath, 0)
 	if err != nil {
 		fatalf(t, ctx, "%v: Error truncating the file: %v", from, err.Error())
@@ -586,7 +585,7 @@ func mkdir(t *testing.T, ctx *context, dirname string) {
 		fullpath string
 		err      error
 	)
-	fullpath = path.Join(ctx.basedir, dirname)
+	fullpath = filepath.Join(ctx.basedir, dirname)
 	if _, err = os.Stat(fullpath); !os.IsNotExist(err) {
 		fatalf(t, ctx, "mkdir %v failed: directory already exists", dirname)
 	}
@@ -739,7 +738,7 @@ func (opt fileTailerConfig) String() string {
 }
 
 func mkTempDir(t *testing.T, ctx *context) string {
-	dir, err := ioutil.TempDir("", "grok_exporter")
+	dir, err := io.TempDir("", "grok_exporter")
 	if err != nil {
 		fatalf(t, ctx, "Failed to create test directory: %v", err.Error())
 	}
@@ -846,7 +845,7 @@ func deleteRecursively(t *testing.T, ctx *context, file string) {
 	}
 	if fileInfo.IsDir() {
 		for _, childInfo := range ls(t, ctx, file) {
-			deleteRecursively(t, ctx, path.Join(file, childInfo.Name()))
+			deleteRecursively(t, ctx, filepath.Join(file, childInfo.Name()))
 		}
 	}
 	ctx.log.Debugf("tearDown: removing %q", file)
@@ -939,7 +938,7 @@ func runTestShutdown(t *testing.T, mode string) {
 	nGoroutinesBefore := runtime.NumGoroutine()
 
 	ctx := setUp(t, "test shutdown while "+mode, closeFileAfterEachLine, fseventTailer, _nocreate, mv)
-	writer := newLogFileWriter(t, ctx, path.Join(ctx.basedir, "test.log"))
+	writer := newLogFileWriter(t, ctx, filepath.Join(ctx.basedir, "test.log"))
 	writer.writeLine(t, ctx, "line 1")
 
 	parsedGlob, err := glob.Parse(filepath.Join(ctx.basedir, "test.log"))
