@@ -21,7 +21,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/prometheus/common/log"
 	"github.com/rcowham/go-libtail/tailer/glob"
 	"github.com/sirupsen/logrus"
 )
@@ -206,7 +205,7 @@ func (t *fileTailer) shutdown() {
 	close(t.errors)
 
 	warnf := func(format string, args ...interface{}) {
-		log.Warnf("error while shutting down the file system watcher: %v", fmt.Sprintf(format, args))
+		logrus.Warnf("error while shutting down the file system watcher: %v", fmt.Sprintf(format, args))
 	}
 
 	for _, dir := range t.watchedDirs {

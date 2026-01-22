@@ -16,7 +16,6 @@ package tailer
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -217,7 +216,7 @@ func TestVisibleInOSXFinder(t *testing.T) {
 	if err != nil {
 		fatalf(t, ctx, "failed to get current user: %v", err)
 	}
-	testDir, err := io.TempDir(currentUser.HomeDir, "grok_exporter_test_dir_")
+	testDir, err := os.MkdirTemp(currentUser.HomeDir, "grok_exporter_test_dir_")
 	if err != nil {
 		fatalf(t, ctx, "failed to create test directory: %v", err.Error())
 	}
@@ -445,15 +444,15 @@ func rotate(t *testing.T, ctx *context, from string, to string) {
 	ctx.log.Debugf("file list after logrotate: %#v", filenames(ls(t, ctx, fromDir)))
 }
 
-func ls(t *testing.T, ctx *context, path string) []os.FileInfo {
-	result, err := io.ReadDir(path)
+func ls(t *testing.T, ctx *context, path string) []os.DirEntry {
+	result, err := os.ReadDir(path)
 	if err != nil {
 		fatalf(t, ctx, "%v: Failed to list directory: %v", path, err.Error())
 	}
 	return result
 }
 
-func containsFile(files []os.FileInfo, filename string) bool {
+func containsFile(files []os.DirEntry, filename string) bool {
 	for _, f := range files {
 		if filepath.Base(f.Name()) == filepath.Base(filename) {
 			return true
@@ -485,7 +484,7 @@ func moveOrFail(t *testing.T, ctx *context, from, to string) {
 	}
 }
 
-func filenames(fileInfos []os.FileInfo) []string {
+func filenames(fileInfos []os.DirEntry) []string {
 	result := make([]string, 0, len(fileInfos))
 	for _, fileInfo := range fileInfos {
 		result = append(result, fileInfo.Name())
@@ -505,11 +504,11 @@ func mvOrFail(t *testing.T, ctx *context, from, to string) {
 func cpOrFail(t *testing.T, ctx *context, from, to string) {
 	fromPath := filepath.Join(ctx.basedir, from)
 	toPath := filepath.Join(ctx.basedir, to)
-	data, err := io.ReadFile(fromPath)
+	data, err := os.ReadFile(fromPath)
 	if err != nil {
 		fatalf(t, ctx, "%v: Copy failed, cannot read file: %v", fromPath, err.Error())
 	}
-	err = io.WriteFile(toPath, data, 0644)
+	err = os.WriteFile(toPath, data, 0644)
 	if err != nil {
 		fatalf(t, ctx, "%v: Copy failed, cannot write file: %v", toPath, err.Error())
 	}
@@ -553,7 +552,7 @@ func createFromTemp(t *testing.T, ctx *context, from string) {
 	if containsFile(filesBeforeCreate, filename) {
 		fatalf(t, ctx, "%v contains file %v before create.", dir, filename)
 	}
-	tmpFile, err := io.TempFile(dir, "logrotate_temp.")
+	tmpFile, err := os.CreateTemp(dir, "logrotate_temp.")
 	if err != nil {
 		fatalf(t, ctx, "failed to create temporary log file in %v: %v", dir, err.Error())
 	}
@@ -738,7 +737,7 @@ func (opt fileTailerConfig) String() string {
 }
 
 func mkTempDir(t *testing.T, ctx *context) string {
-	dir, err := io.TempDir("", "grok_exporter")
+	dir, err := os.MkdirTemp("", "grok_exporter")
 	if err != nil {
 		fatalf(t, ctx, "Failed to create test directory: %v", err.Error())
 	}
