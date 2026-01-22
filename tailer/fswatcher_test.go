@@ -930,7 +930,7 @@ func TestShutdownDuringSendLine(t *testing.T) {
 func runTestShutdown(t *testing.T, mode string) {
 
 	if runtime.GOOS == "windows" {
-		t.Skip("The shutdown tests are flaky on Windows. We skip them until either golang.org/x/exp/winfsnotify is fixed, or until we do our own implementation. This shouldn't be a problem when running grok_exporter, because in grok_exporter the file system watcher is never stopped.")
+		t.Skip("The shutdown tests are flaky on Windows. We skip them until either github.com/fsnotify/fsnotify is fixed, or until we do our own implementation. This shouldn't be a problem when running grok_exporter, because in grok_exporter the file system watcher is never stopped.")
 		return
 	}
 
