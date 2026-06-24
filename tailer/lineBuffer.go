@@ -15,9 +15,7 @@
 package tailer
 
 import (
-	"container/list"
 	"io"
-	logFatal "log"
 	"sync"
 
 	"github.com/rcowham/go-libtail/tailer/fswatcher"
@@ -32,50 +30,75 @@ type lineBuffer interface {
 	Clear()
 }
 
+const lineBufferInitialSize = 1024
+
 func NewLineBuffer() lineBuffer {
 	return &lineBufferImpl{
-		buffer: list.New(),
+		items:  make([]*fswatcher.Line, lineBufferInitialSize),
 		lock:   sync.NewCond(&sync.Mutex{}),
 		closed: false,
+		empty:  true,
 	}
 }
 
 type lineBufferImpl struct {
-	buffer *list.List
+	items  []*fswatcher.Line
+	head   int
+	tail   int
+	len    int
 	lock   *sync.Cond
 	closed bool
+	empty  bool
 }
 
 func (b *lineBufferImpl) Push(line *fswatcher.Line) {
 	b.lock.L.Lock()
 	defer b.lock.L.Unlock()
-	if !b.closed {
-		b.buffer.PushBack(line)
+	if b.closed {
+		return
+	}
+	if b.len >= len(b.items) {
+		b.grow()
+	}
+	wasEmpty := b.empty
+	b.items[b.tail] = line
+	b.tail = (b.tail + 1) % len(b.items)
+	b.len++
+	b.empty = false
+	if wasEmpty {
 		b.lock.Signal()
 	}
+}
+
+func (b *lineBufferImpl) grow() {
+	newSize := len(b.items) * 2
+	newItems := make([]*fswatcher.Line, newSize)
+	for i := 0; i < b.len; i++ {
+		newItems[i] = b.items[(b.head+i)%len(b.items)]
+	}
+	b.items = newItems
+	b.head = 0
+	b.tail = b.len
 }
 
 // Interrupted by Close(), returns nil when Close() is called.
 func (b *lineBufferImpl) BlockingPop() *fswatcher.Line {
 	b.lock.L.Lock()
 	defer b.lock.L.Unlock()
-	if !b.closed {
-		for b.buffer.Len() == 0 && !b.closed {
-			b.lock.Wait()
-		}
-		if !b.closed {
-			first := b.buffer.Front()
-			b.buffer.Remove(first)
-			switch line := first.Value.(type) {
-			case *fswatcher.Line:
-				return line
-			default:
-				// this cannot happen
-				logFatal.Fatal("unexpected type in tailer b.buffer")
-			}
-		}
+	for b.empty && !b.closed {
+		b.lock.Wait()
 	}
-	return nil
+	if b.closed {
+		return nil
+	}
+	line := b.items[b.head]
+	b.items[b.head] = nil
+	b.head = (b.head + 1) % len(b.items)
+	b.len--
+	if b.len == 0 {
+		b.empty = true
+	}
+	return line
 }
 
 func (b *lineBufferImpl) Close() error {
@@ -91,11 +114,17 @@ func (b *lineBufferImpl) Close() error {
 func (b *lineBufferImpl) Len() int {
 	b.lock.L.Lock()
 	defer b.lock.L.Unlock()
-	return b.buffer.Len()
+	return b.len
 }
 
 func (b *lineBufferImpl) Clear() {
 	b.lock.L.Lock()
 	defer b.lock.L.Unlock()
-	b.buffer = list.New()
+	for i := 0; i < b.len; i++ {
+		b.items[(b.head+i)%len(b.items)] = nil
+	}
+	b.head = 0
+	b.tail = 0
+	b.len = 0
+	b.empty = true
 }

@@ -23,9 +23,11 @@ import (
 const defaultMaxLineBytes = 1024 * 1024
 
 type lineReader struct {
-	remainingBytesFromLastRead []byte
-	maxLineBytes               int
-	discardingTooLongLine      bool
+	buf                   []byte
+	pos                   int
+	maxLineBytes          int
+	discardingTooLongLine bool
+	overflow              []byte // data read but not yet used
 }
 
 type lineTooLongError struct {
@@ -39,8 +41,9 @@ func (e lineTooLongError) Error() string {
 
 func NewLineReader() *lineReader {
 	return &lineReader{
-		remainingBytesFromLastRead: []byte{},
-		maxLineBytes:               defaultMaxLineBytes,
+		buf:          make([]byte, defaultMaxLineBytes),
+		pos:          0,
+		maxLineBytes: defaultMaxLineBytes,
 	}
 }
 
@@ -49,8 +52,9 @@ func NewLineReaderWithMaxLineBytes(maxLineBytes int) *lineReader {
 		maxLineBytes = defaultMaxLineBytes
 	}
 	return &lineReader{
-		remainingBytesFromLastRead: []byte{},
-		maxLineBytes:               maxLineBytes,
+		buf:          make([]byte, maxLineBytes),
+		pos:          0,
+		maxLineBytes: maxLineBytes,
 	}
 }
 
@@ -62,11 +66,7 @@ func NewLineReaderWithMaxLineBytes(maxLineBytes int) *lineReader {
 // if eof is true, line is always "" and err always is nil.
 // if eof is false and err is nil, an empty line means that there actually was an empty line in the file.
 func (r *lineReader) ReadLine(file io.Reader) (string, bool, error) {
-	var (
-		err error
-		buf = make([]byte, 512)
-		n   = 0
-	)
+	var readBuf = make([]byte, 4096)
 	for {
 		if r.discardingTooLongLine {
 			eof, err := r.discardUntilNewline(file)
@@ -78,61 +78,118 @@ func (r *lineReader) ReadLine(file io.Reader) (string, bool, error) {
 			}
 		}
 
-		newlinePos := bytes.IndexByte(r.remainingBytesFromLastRead, '\n')
+		newlinePos := bytes.IndexByte(r.buf[:r.pos], '\n')
 		if newlinePos >= 0 {
-			l := len(r.remainingBytesFromLastRead)
 			result := make([]byte, newlinePos)
-			copy(result, r.remainingBytesFromLastRead[:newlinePos])
-			copy(r.remainingBytesFromLastRead, r.remainingBytesFromLastRead[newlinePos+1:])
-			r.remainingBytesFromLastRead = r.remainingBytesFromLastRead[:l-(newlinePos+1)]
+			copy(result, r.buf[:newlinePos])
+			copy(r.buf, r.buf[newlinePos+1:r.pos])
+			r.pos -= newlinePos + 1
 			return string(stripWindowsLineEnding(result)), false, nil
-		} else if err != nil {
-			if err == io.EOF {
-				return "", true, nil
-			} else {
-				return "", false, err
-			}
-		} else {
-			n, err = file.Read(buf)
-			if n > 0 {
-				// io.Reader: Callers should always process the n > 0 bytes returned before considering the error err.
-				r.remainingBytesFromLastRead = append(r.remainingBytesFromLastRead, buf[0:n]...)
-				if len(r.remainingBytesFromLastRead) > r.maxLineBytes {
-					r.discardingTooLongLine = true
-					return "", false, lineTooLongError{lineBytes: len(r.remainingBytesFromLastRead), maxLineBytes: r.maxLineBytes}
+		}
+
+		// First, try to use any buffered overflow data
+		if len(r.overflow) > 0 {
+			n := len(r.overflow)
+			if r.pos+n > r.maxLineBytes {
+				r.discardingTooLongLine = true
+				fitBytes := r.maxLineBytes - r.pos
+				if fitBytes > 0 {
+					copy(r.buf[r.pos:], r.overflow[:fitBytes])
+					r.pos += fitBytes
 				}
+				r.overflow = r.overflow[fitBytes:]
+				return "", false, lineTooLongError{lineBytes: r.pos + len(r.overflow), maxLineBytes: r.maxLineBytes}
+			}
+			copy(r.buf[r.pos:], r.overflow)
+			r.pos += n
+			r.overflow = nil
+		} else {
+			n, err := file.Read(readBuf)
+			if n > 0 {
+				if r.pos+n > r.maxLineBytes {
+					r.discardingTooLongLine = true
+					fitBytes := r.maxLineBytes - r.pos
+					if fitBytes > 0 {
+						copy(r.buf[r.pos:], readBuf[:fitBytes])
+						r.pos += fitBytes
+					}
+					r.overflow = append(r.overflow, readBuf[fitBytes:n]...)
+					return "", false, lineTooLongError{lineBytes: r.pos + len(r.overflow), maxLineBytes: r.maxLineBytes}
+				}
+				copy(r.buf[r.pos:], readBuf[:n])
+				r.pos += n
+			}
+			if err != nil {
+				if err == io.EOF {
+					return "", true, nil
+				}
+				return "", false, err
 			}
 		}
 	}
 }
 
 func (r *lineReader) discardUntilNewline(file io.Reader) (bool, error) {
-	var (
-		err error
-		buf = make([]byte, 512)
-		n   = 0
-	)
+	readBuf := make([]byte, 4096)
 
 	for {
-		newlinePos := bytes.IndexByte(r.remainingBytesFromLastRead, '\n')
+		// Look for newline in current buffer
+		newlinePos := bytes.IndexByte(r.buf[:r.pos], '\n')
 		if newlinePos >= 0 {
-			l := len(r.remainingBytesFromLastRead)
-			copy(r.remainingBytesFromLastRead, r.remainingBytesFromLastRead[newlinePos+1:])
-			r.remainingBytesFromLastRead = r.remainingBytesFromLastRead[:l-(newlinePos+1)]
+			// Found newline, shift buffer to keep only data after it
+			copy(r.buf, r.buf[newlinePos+1:r.pos])
+			r.pos -= newlinePos + 1
 			r.discardingTooLongLine = false
 			return false, nil
 		}
 
+		// Also check overflow buffer
+		if len(r.overflow) > 0 {
+			newlineInOverflow := bytes.IndexByte(r.overflow, '\n')
+			if newlineInOverflow >= 0 {
+				// Found newline in overflow, keep only data after it
+				copySize := len(r.overflow) - newlineInOverflow - 1
+				if copySize > 0 && copySize <= r.maxLineBytes {
+					r.pos = 0
+					copy(r.buf, r.overflow[newlineInOverflow+1:])
+					r.pos = copySize
+				} else {
+					r.pos = 0
+				}
+				r.overflow = nil
+				r.discardingTooLongLine = false
+				return false, nil
+			}
+			// No newline in overflow, need to read more
+		}
+
+		// Read more data
+		n, err := file.Read(readBuf)
+		if n > 0 {
+			// Look for newline in new data
+			newlineInRead := bytes.IndexByte(readBuf[:n], '\n')
+			if newlineInRead >= 0 {
+				// Found newline, keep only data after it
+				copySize := n - newlineInRead - 1
+				if copySize > 0 && copySize <= r.maxLineBytes {
+					r.pos = 0
+					copy(r.buf, readBuf[newlineInRead+1:n])
+					r.pos = copySize
+				} else {
+					r.pos = 0
+				}
+				r.overflow = nil
+				r.discardingTooLongLine = false
+				return false, nil
+			}
+			// No newline yet, append to overflow and continue
+			r.overflow = append(r.overflow, readBuf[:n]...)
+		}
 		if err != nil {
 			if err == io.EOF {
 				return true, nil
 			}
 			return false, err
-		}
-
-		n, err = file.Read(buf)
-		if n > 0 {
-			r.remainingBytesFromLastRead = append(r.remainingBytesFromLastRead, buf[0:n]...)
 		}
 	}
 }
@@ -146,5 +203,7 @@ func stripWindowsLineEnding(s []byte) []byte {
 }
 
 func (r *lineReader) Clear() {
-	r.remainingBytesFromLastRead = r.remainingBytesFromLastRead[:0]
+	r.pos = 0
+	r.overflow = nil
+	r.discardingTooLongLine = false
 }
