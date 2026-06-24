@@ -98,7 +98,9 @@ func (r *lineReader) ReadLine(file io.Reader) (string, bool, error) {
 					r.pos += fitBytes
 				}
 				r.overflow = r.overflow[fitBytes:]
-				return "", false, lineTooLongError{lineBytes: r.pos + len(r.overflow), maxLineBytes: r.maxLineBytes}
+				// Return truncated line with error
+				truncated := string(stripWindowsLineEnding(r.buf[:r.pos]))
+				return truncated, false, lineTooLongError{lineBytes: r.pos + len(r.overflow), maxLineBytes: r.maxLineBytes}
 			}
 			copy(r.buf[r.pos:], r.overflow)
 			r.pos += n
@@ -114,7 +116,9 @@ func (r *lineReader) ReadLine(file io.Reader) (string, bool, error) {
 						r.pos += fitBytes
 					}
 					r.overflow = append(r.overflow, readBuf[fitBytes:n]...)
-					return "", false, lineTooLongError{lineBytes: r.pos + len(r.overflow), maxLineBytes: r.maxLineBytes}
+					// Return truncated line with error
+					truncated := string(stripWindowsLineEnding(r.buf[:r.pos]))
+					return truncated, false, lineTooLongError{lineBytes: r.pos + len(r.overflow), maxLineBytes: r.maxLineBytes}
 				}
 				copy(r.buf[r.pos:], readBuf[:n])
 				r.pos += n

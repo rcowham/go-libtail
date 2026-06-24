@@ -39,7 +39,7 @@ func TestReadLineWithLongLineOverLimit(t *testing.T) {
 	r := NewLineReaderWithMaxLineBytes(1024)
 	input := strings.Repeat("b", 1025) + "\n"
 
-	_, eof, err := r.ReadLine(strings.NewReader(input))
+	line, eof, err := r.ReadLine(strings.NewReader(input))
 	if err == nil {
 		t.Fatal("ReadLine() expected error for oversized line, got nil")
 	}
@@ -49,21 +49,34 @@ func TestReadLineWithLongLineOverLimit(t *testing.T) {
 	if eof {
 		t.Fatal("ReadLine() unexpectedly returned eof=true on oversized line")
 	}
+	// Check that truncated line is returned (1024 bytes)
+	if len(line) != 1024 {
+		t.Fatalf("ReadLine() returned truncated line length %d, expected %d", len(line), 1024)
+	}
+	if line != strings.Repeat("b", 1024) {
+		t.Fatal("ReadLine() returned unexpected truncated line content")
+	}
 }
 
 func TestReadLineSkipsOversizedLineOnNextCall(t *testing.T) {
 	r := NewLineReaderWithMaxLineBytes(5)
 	input := "123456\nok\n"
 
-	_, eof, err := r.ReadLine(strings.NewReader(input))
+	// First call: truncated line with error
+	line, eof, err := r.ReadLine(strings.NewReader(input))
 	if err == nil {
 		t.Fatal("ReadLine() expected error for oversized line, got nil")
 	}
 	if eof {
 		t.Fatal("ReadLine() unexpectedly returned eof=true on oversized line")
 	}
+	// Check truncated line is returned (first 5 bytes: "12345")
+	if line != "12345" {
+		t.Fatalf("ReadLine() returned truncated line %q, expected %q", line, "12345")
+	}
 
-	line, eof, err := r.ReadLine(strings.NewReader(""))
+	// Second call: next complete line
+	line, eof, err = r.ReadLine(strings.NewReader(""))
 	if err != nil {
 		t.Fatalf("second ReadLine() returned unexpected error: %v", err)
 	}

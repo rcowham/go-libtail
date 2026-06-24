@@ -25,7 +25,7 @@ func TestReadNewLinesContinueOnLongLine(t *testing.T) {
 	options := normalizeTailerOptions(TailerOptions{MaxLineBytes: 16, ContinueOnLongLine: true})
 	tailer := &fileTailer{
 		options: options,
-		lines:   make(chan *Line, 2),
+		lines:   make(chan *Line, 3),
 		errors:  make(chan Error, 2),
 		done:    make(chan struct{}),
 	}
@@ -35,6 +35,18 @@ func TestReadNewLinesContinueOnLongLine(t *testing.T) {
 		t.Fatalf("readNewLines() returned unexpected error: %v", err)
 	}
 
+	// First, expect the truncated oversized line
+	select {
+	case gotLine := <-tailer.lines:
+		expectedTruncated := strings.Repeat("x", 16)
+		if gotLine.Line != expectedTruncated {
+			t.Fatalf("truncated line=%q, want %q", gotLine.Line, expectedTruncated)
+		}
+	default:
+		t.Fatal("expected truncated line, got none")
+	}
+
+	// Then expect the error
 	select {
 	case gotErr := <-tailer.errors:
 		if gotErr.Type() != LineTooLong {
@@ -44,6 +56,7 @@ func TestReadNewLinesContinueOnLongLine(t *testing.T) {
 		t.Fatal("expected TooLongLine error, got none")
 	}
 
+	// Finally expect the next complete line
 	select {
 	case gotLine := <-tailer.lines:
 		if gotLine.Line != "short" {

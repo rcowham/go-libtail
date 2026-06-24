@@ -48,13 +48,16 @@ func main() {
 			if !ok {
 				return
 			}
-			_ = line
+			// Process normal lines and truncated oversized lines.
+			logger.Infof("line from %s: %s", line.File, line.Line)
 		case terr, ok := <-t.Errors():
 			if !ok {
 				return
 			}
 			if terr.Type() == fswatcher.LineTooLong {
-				logger.Warnf("skipped oversized line: %v", terr)
+				// With ContinueOnLongLine=true, a truncated line has already been
+				// emitted on Lines() before this error arrives.
+				logger.Warnf("processed truncated oversized line: %v", terr)
 				continue
 			}
 			logger.Errorf("tailer error: %v", terr)
@@ -82,7 +85,24 @@ t, err := fswatcher.RunPollingFileTailerWithOptions(
 - If `MaxLineBytes <= 0`, the default is 1 MiB.
 - When a line exceeds the limit, the emitted error type is `fswatcher.LineTooLong`.
 - If `TailerOptions.ContinueOnLongLine` is `false` (default), tailing stops on a long line error.
-- If `TailerOptions.ContinueOnLongLine` is `true`, the oversized line is skipped up to the next newline, an error is sent on `Errors()`, and tailing continues.
+- If `TailerOptions.ContinueOnLongLine` is `true`, the truncated line (up to `MaxLineBytes`) is sent on `Lines()`, an error is sent on `Errors()`, and tailing continues from the next newline.
+
+Expected event order for oversized lines (`ContinueOnLongLine=true`):
+
+```go
+for {
+	select {
+	case l := <-t.Lines():
+		// For oversized lines, this is the truncated line (<= MaxLineBytes).
+		_ = l
+	case e := <-t.Errors():
+		if e.Type() == fswatcher.LineTooLong {
+			// Corresponds to the previously emitted truncated line.
+			continue
+		}
+	}
+}
+```
 
 ## Alternatives
 
