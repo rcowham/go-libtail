@@ -16,16 +16,41 @@ package fswatcher
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 )
 
+const defaultMaxLineBytes = 1024 * 1024
+
 type lineReader struct {
 	remainingBytesFromLastRead []byte
+	maxLineBytes               int
+	discardingTooLongLine      bool
+}
+
+type lineTooLongError struct {
+	lineBytes    int
+	maxLineBytes int
+}
+
+func (e lineTooLongError) Error() string {
+	return fmt.Sprintf("line exceeds max length: %d > %d bytes", e.lineBytes, e.maxLineBytes)
 }
 
 func NewLineReader() *lineReader {
 	return &lineReader{
 		remainingBytesFromLastRead: []byte{},
+		maxLineBytes:               defaultMaxLineBytes,
+	}
+}
+
+func NewLineReaderWithMaxLineBytes(maxLineBytes int) *lineReader {
+	if maxLineBytes <= 0 {
+		maxLineBytes = defaultMaxLineBytes
+	}
+	return &lineReader{
+		remainingBytesFromLastRead: []byte{},
+		maxLineBytes:               maxLineBytes,
 	}
 }
 
@@ -43,6 +68,16 @@ func (r *lineReader) ReadLine(file io.Reader) (string, bool, error) {
 		n   = 0
 	)
 	for {
+		if r.discardingTooLongLine {
+			eof, err := r.discardUntilNewline(file)
+			if err != nil {
+				return "", false, err
+			}
+			if eof {
+				return "", true, nil
+			}
+		}
+
 		newlinePos := bytes.IndexByte(r.remainingBytesFromLastRead, '\n')
 		if newlinePos >= 0 {
 			l := len(r.remainingBytesFromLastRead)
@@ -62,7 +97,42 @@ func (r *lineReader) ReadLine(file io.Reader) (string, bool, error) {
 			if n > 0 {
 				// io.Reader: Callers should always process the n > 0 bytes returned before considering the error err.
 				r.remainingBytesFromLastRead = append(r.remainingBytesFromLastRead, buf[0:n]...)
+				if len(r.remainingBytesFromLastRead) > r.maxLineBytes {
+					r.discardingTooLongLine = true
+					return "", false, lineTooLongError{lineBytes: len(r.remainingBytesFromLastRead), maxLineBytes: r.maxLineBytes}
+				}
 			}
+		}
+	}
+}
+
+func (r *lineReader) discardUntilNewline(file io.Reader) (bool, error) {
+	var (
+		err error
+		buf = make([]byte, 512)
+		n   = 0
+	)
+
+	for {
+		newlinePos := bytes.IndexByte(r.remainingBytesFromLastRead, '\n')
+		if newlinePos >= 0 {
+			l := len(r.remainingBytesFromLastRead)
+			copy(r.remainingBytesFromLastRead, r.remainingBytesFromLastRead[newlinePos+1:])
+			r.remainingBytesFromLastRead = r.remainingBytesFromLastRead[:l-(newlinePos+1)]
+			r.discardingTooLongLine = false
+			return false, nil
+		}
+
+		if err != nil {
+			if err == io.EOF {
+				return true, nil
+			}
+			return false, err
+		}
+
+		n, err = file.Read(buf)
+		if n > 0 {
+			r.remainingBytesFromLastRead = append(r.remainingBytesFromLastRead, buf[0:n]...)
 		}
 	}
 }

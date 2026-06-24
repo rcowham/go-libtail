@@ -31,6 +31,15 @@ type FileTailer interface {
 	Close()
 }
 
+type TailerOptions struct {
+	// MaxLineBytes is the maximum number of bytes allowed per line before returning an error.
+	// Values <= 0 use the default limit.
+	MaxLineBytes int
+	// ContinueOnLongLine controls behavior when a line exceeds MaxLineBytes.
+	// If true, the tailer reports a TooLongLine error and continues after skipping to the next newline.
+	ContinueOnLongLine bool
+}
+
 type Line struct {
 	Line  string
 	File  string
@@ -52,6 +61,7 @@ type fileTailer struct {
 	watchedDirs  []*Dir
 	watchedFiles map[string]*fileWithReader // path -> fileWithReader
 	osSpecific   fswatcher
+	options      TailerOptions
 	lines        chan *Line
 	errors       chan Error
 	done         chan struct{}
@@ -97,17 +107,27 @@ func (t *fileTailer) Close() {
 }
 
 func RunFileTailer(globs []glob.Glob, readall bool, failOnMissingFile bool, log logrus.FieldLogger) (FileTailer, error) {
-	return runFileTailer(initWatcher, globs, readall, failOnMissingFile, log)
+	return RunFileTailerWithOptions(globs, readall, failOnMissingFile, TailerOptions{}, log)
+}
+
+// RunFileTailerWithOptions starts a file tailer using configurable options.
+func RunFileTailerWithOptions(globs []glob.Glob, readall bool, failOnMissingFile bool, options TailerOptions, log logrus.FieldLogger) (FileTailer, error) {
+	return runFileTailer(initWatcher, globs, readall, failOnMissingFile, options, log)
 }
 
 func RunPollingFileTailer(globs []glob.Glob, readall bool, failOnMissingFile bool, pollInterval time.Duration, log logrus.FieldLogger) (FileTailer, error) {
+	return RunPollingFileTailerWithOptions(globs, readall, failOnMissingFile, pollInterval, TailerOptions{}, log)
+}
+
+// RunPollingFileTailerWithOptions starts a polling file tailer using configurable options.
+func RunPollingFileTailerWithOptions(globs []glob.Glob, readall bool, failOnMissingFile bool, pollInterval time.Duration, options TailerOptions, log logrus.FieldLogger) (FileTailer, error) {
 	initFunc := func() (fswatcher, Error) {
 		return initPollingWatcher(pollInterval)
 	}
-	return runFileTailer(initFunc, globs, readall, failOnMissingFile, log)
+	return runFileTailer(initFunc, globs, readall, failOnMissingFile, options, log)
 }
 
-func runFileTailer(initFunc func() (fswatcher, Error), globs []glob.Glob, readall bool, failOnMissingFile bool, log logrus.FieldLogger) (FileTailer, error) {
+func runFileTailer(initFunc func() (fswatcher, Error), globs []glob.Glob, readall bool, failOnMissingFile bool, options TailerOptions, log logrus.FieldLogger) (FileTailer, error) {
 
 	var (
 		t   *fileTailer
@@ -117,6 +137,7 @@ func runFileTailer(initFunc func() (fswatcher, Error), globs []glob.Glob, readal
 	t = &fileTailer{
 		globs:        globs,
 		watchedFiles: make(map[string]*fileWithReader),
+		options:      normalizeTailerOptions(options),
 		lines:        make(chan *Line),
 		errors:       make(chan Error),
 		done:         make(chan struct{}),
@@ -205,7 +226,7 @@ func (t *fileTailer) shutdown() {
 	close(t.errors)
 
 	warnf := func(format string, args ...interface{}) {
-		logrus.Warnf("error while shutting down the file system watcher: %v", fmt.Sprintf(format, args))
+		logrus.Warnf("error while shutting down the file system watcher: %v", fmt.Sprintf(format, args...))
 	}
 
 	for _, dir := range t.watchedDirs {
@@ -326,7 +347,7 @@ func (t *fileTailer) syncFilesInDir(dir *Dir, readall bool, log logrus.FieldLogg
 			return Err
 		}
 
-		newFileWithReader := &fileWithReader{file: newFile, reader: NewLineReader()}
+		newFileWithReader := &fileWithReader{file: newFile, reader: NewLineReaderWithMaxLineBytes(t.options.MaxLineBytes)}
 		Err = t.readNewLines(newFileWithReader, fileLogger)
 		if Err != nil {
 			newFile.Close()
@@ -345,6 +366,13 @@ func (t *fileTailer) syncFilesInDir(dir *Dir, readall bool, log logrus.FieldLogg
 	return nil
 }
 
+func normalizeTailerOptions(options TailerOptions) TailerOptions {
+	if options.MaxLineBytes <= 0 {
+		options.MaxLineBytes = defaultMaxLineBytes
+	}
+	return options
+}
+
 func (t *fileTailer) readNewLines(file *fileWithReader, log logrus.FieldLogger) Error {
 	var (
 		line string
@@ -354,6 +382,18 @@ func (t *fileTailer) readNewLines(file *fileWithReader, log logrus.FieldLogger) 
 	for {
 		line, eof, err = file.reader.ReadLine(file.file)
 		if err != nil {
+			if _, ok := err.(lineTooLongError); ok {
+				longLineErr := NewErrorf(LineTooLong, err, "%v: read() failed", file.file.Name())
+				if t.options.ContinueOnLongLine {
+					select {
+					case <-t.done:
+						return nil
+					case t.errors <- longLineErr:
+					}
+					continue
+				}
+				return longLineErr
+			}
 			return NewErrorf(NotSpecified, err, "%v: read() failed", file.file.Name())
 		}
 		if eof {

@@ -22,6 +22,7 @@ const (
 	NotSpecified = iota
 	DirectoryNotFound
 	FileNotFound
+	LineTooLong
 
 	// The WinFileRemoved Error should never be seen, because it is handled internally in the FileTailer.
 	// TODO: Refactor error handling such that this is not part of the public interface.
