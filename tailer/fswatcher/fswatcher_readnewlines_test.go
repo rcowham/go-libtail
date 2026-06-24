@@ -42,6 +42,9 @@ func TestReadNewLinesContinueOnLongLine(t *testing.T) {
 		if gotLine.Line != expectedTruncated {
 			t.Fatalf("truncated line=%q, want %q", gotLine.Line, expectedTruncated)
 		}
+		if !gotLine.Truncated {
+			t.Fatal("expected truncated line to have Truncated=true")
+		}
 	default:
 		t.Fatal("expected truncated line, got none")
 	}
@@ -61,6 +64,9 @@ func TestReadNewLinesContinueOnLongLine(t *testing.T) {
 	case gotLine := <-tailer.lines:
 		if gotLine.Line != "short" {
 			t.Fatalf("line=%q, want %q", gotLine.Line, "short")
+		}
+		if gotLine.Truncated {
+			t.Fatal("expected normal line to have Truncated=false")
 		}
 	default:
 		t.Fatal("expected a line after skipping oversized line, got none")

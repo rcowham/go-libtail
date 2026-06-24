@@ -41,9 +41,10 @@ type TailerOptions struct {
 }
 
 type Line struct {
-	Line  string
-	File  string
-	Extra interface{}
+	Line      string
+	File      string
+	Truncated bool
+	Extra     interface{}
 }
 
 // ideas how this might look like in the config file:
@@ -390,7 +391,7 @@ func (t *fileTailer) readNewLines(file *fileWithReader, log logrus.FieldLogger) 
 						select {
 						case <-t.done:
 							return nil
-						case t.lines <- &Line{Line: line, File: file.file.Name()}:
+						case t.lines <- &Line{Line: line, File: file.file.Name(), Truncated: true}:
 						}
 					}
 					select {
@@ -411,7 +412,7 @@ func (t *fileTailer) readNewLines(file *fileWithReader, log logrus.FieldLogger) 
 		select {
 		case <-t.done:
 			return nil
-		case t.lines <- &Line{Line: line, File: file.file.Name()}:
+		case t.lines <- &Line{Line: line, File: file.file.Name(), Truncated: false}:
 		}
 	}
 }
