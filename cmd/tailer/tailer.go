@@ -29,14 +29,11 @@ import (
 )
 
 var (
-	logpath                 = flag.String("logpath", "", "Path to the log file to tail.")
-	maxLineBytes            = flag.Int("max-line-bytes", 0, "Maximum allowed bytes per line before truncation/error. Values <= 0 use default (1 MiB).")
-	continueOnLongLine      = flag.Bool("continue-on-long-line", false, "Continue tailing after oversized lines.")
-	ignoreLineTooLongErrors = flag.Bool("ignore-line-too-long-errors", false, "Do not exit on LineTooLong errors (useful with -continue-on-long-line).")
-	onlyTruncatedLines      = flag.Bool("only-truncated-lines", false, "Process/print only truncated lines (requires -continue-on-long-line).")
-	maxLines                = flag.Int("max-lines", 0, "Exit after processing this many output lines. 0 means unlimited.")
-	noOutput                = flag.Bool("no-output", false, "Do not print lines; useful for throughput testing.")
-	decodeEscapedSequences  = flag.Bool("decode-escaped-sequences", true, "Decode escaped \\n and \\t sequences in output lines.")
+	logpath                = flag.String("logpath", "", "Path to the log file to tail.")
+	maxLineBytes           = flag.Int("max-line-bytes", 0, "Maximum allowed bytes per line before truncation/error. Values <= 0 use default (1 MiB).")
+	maxLines               = flag.Int("max-lines", 0, "Exit after processing this many output lines. 0 means unlimited.")
+	noOutput               = flag.Bool("no-output", false, "Do not print lines; useful for throughput testing.")
+	decodeEscapedSequences = flag.Bool("decode-escaped-sequences", true, "Decode escaped \\n and \\t sequences in output lines.")
 )
 
 type myConfig struct {
@@ -46,9 +43,6 @@ type myConfig struct {
 	Readall              bool
 	FailOnMissingLogfile bool
 	MaxLineBytes         int
-	ContinueOnLongLine   bool
-	IgnoreLineTooLong    bool
-	OnlyTruncatedLines   bool
 	MaxLines             int
 	NoOutput             bool
 	DecodeEscapedSeqs    bool
@@ -64,9 +58,6 @@ func main() {
 		Readall:              true,
 		FailOnMissingLogfile: true,
 		MaxLineBytes:         *maxLineBytes,
-		ContinueOnLongLine:   *continueOnLongLine,
-		IgnoreLineTooLong:    *ignoreLineTooLongErrors,
-		OnlyTruncatedLines:   *onlyTruncatedLines,
 		MaxLines:             *maxLines,
 		NoOutput:             *noOutput,
 		DecodeEscapedSeqs:    *decodeEscapedSequences,
@@ -84,9 +75,6 @@ func main() {
 			if !ok {
 				return
 			}
-			if cfg.IgnoreLineTooLong && err.Type() == fswatcher.LineTooLong {
-				continue
-			}
 			if os.IsNotExist(err.Cause()) {
 				exitOnError(fmt.Errorf("error reading log lines: %v: use 'fail_on_missing_logfile: false' in the input configuration if you want grok_exporter to start even though the logfile is missing", err))
 			} else {
@@ -95,9 +83,6 @@ func main() {
 		case line, ok := <-tail.Lines():
 			if !ok {
 				return
-			}
-			if cfg.OnlyTruncatedLines && !line.Truncated {
-				continue
 			}
 			processed++
 			if !cfg.NoOutput {
@@ -135,8 +120,7 @@ func startTailer(cfgInput *myConfig) (fswatcher.FileTailer, error) {
 	switch {
 	case cfgInput.Type == "file":
 		options := fswatcher.TailerOptions{
-			MaxLineBytes:       cfgInput.MaxLineBytes,
-			ContinueOnLongLine: cfgInput.ContinueOnLongLine,
+			MaxLineBytes: cfgInput.MaxLineBytes,
 		}
 		if cfgInput.PollInterval == 0 {
 			tail, err = fswatcher.RunFileTailerWithOptions([]glob.Glob{g}, cfgInput.Readall, cfgInput.FailOnMissingLogfile, options, logger)

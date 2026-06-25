@@ -35,9 +35,6 @@ type TailerOptions struct {
 	// MaxLineBytes is the maximum number of bytes allowed per line before returning an error.
 	// Values <= 0 use the default limit.
 	MaxLineBytes int
-	// ContinueOnLongLine controls behavior when a line exceeds MaxLineBytes.
-	// If true, the tailer reports a TooLongLine error and continues after skipping to the next newline.
-	ContinueOnLongLine bool
 }
 
 type Line struct {
@@ -384,24 +381,15 @@ func (t *fileTailer) readNewLines(file *fileWithReader, log logrus.FieldLogger) 
 		line, eof, err = file.reader.ReadLine(file.file)
 		if err != nil {
 			if _, ok := err.(lineTooLongError); ok {
-				longLineErr := NewErrorf(LineTooLong, err, "%v: read() failed", file.file.Name())
-				if t.options.ContinueOnLongLine {
-					// Send the truncated line when ContinueOnLongLine is true
-					if line != "" {
-						select {
-						case <-t.done:
-							return nil
-						case t.lines <- &Line{Line: line, File: file.file.Name(), Truncated: true}:
-						}
-					}
+				// Oversized lines are always truncated and processing continues at the next newline.
+				if line != "" {
 					select {
 					case <-t.done:
 						return nil
-					case t.errors <- longLineErr:
+					case t.lines <- &Line{Line: line, File: file.file.Name(), Truncated: true}:
 					}
-					continue
 				}
-				return longLineErr
+				continue
 			}
 			return NewErrorf(NotSpecified, err, "%v: read() failed", file.file.Name())
 		}

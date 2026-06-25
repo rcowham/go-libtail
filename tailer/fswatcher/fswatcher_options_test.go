@@ -15,10 +15,3 @@ func TestNormalizeTailerOptionsKeepsCustomMaxLineBytes(t *testing.T) {
 		t.Fatalf("MaxLineBytes=%d, want %d", options.MaxLineBytes, 2048)
 	}
 }
-
-func TestNormalizeTailerOptionsKeepsContinueOnLongLine(t *testing.T) {
-	options := normalizeTailerOptions(TailerOptions{ContinueOnLongLine: true})
-	if !options.ContinueOnLongLine {
-		t.Fatal("ContinueOnLongLine=false, want true")
-	}
-}

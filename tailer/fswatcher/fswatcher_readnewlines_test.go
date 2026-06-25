@@ -9,7 +9,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-func TestReadNewLinesContinueOnLongLine(t *testing.T) {
+func TestReadNewLinesTruncatesAndContinuesOnLongLine(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "test.log")
 	content := strings.Repeat("x", 32) + "\nshort\n"
 	if err := os.WriteFile(logPath, []byte(content), 0644); err != nil {
@@ -22,11 +22,11 @@ func TestReadNewLinesContinueOnLongLine(t *testing.T) {
 	}
 	defer f.Close()
 
-	options := normalizeTailerOptions(TailerOptions{MaxLineBytes: 16, ContinueOnLongLine: true})
+	options := normalizeTailerOptions(TailerOptions{MaxLineBytes: 16})
 	tailer := &fileTailer{
 		options: options,
 		lines:   make(chan *Line, 3),
-		errors:  make(chan Error, 2),
+		errors:  make(chan Error, 1),
 		done:    make(chan struct{}),
 	}
 
@@ -49,14 +49,11 @@ func TestReadNewLinesContinueOnLongLine(t *testing.T) {
 		t.Fatal("expected truncated line, got none")
 	}
 
-	// Then expect the error
+	// No long-line error should be emitted; truncation is indicated on the line itself.
 	select {
 	case gotErr := <-tailer.errors:
-		if gotErr.Type() != LineTooLong {
-			t.Fatalf("error type=%v, want %v", gotErr.Type(), LineTooLong)
-		}
+		t.Fatalf("unexpected error emitted: %v", gotErr)
 	default:
-		t.Fatal("expected TooLongLine error, got none")
 	}
 
 	// Finally expect the next complete line
@@ -73,7 +70,7 @@ func TestReadNewLinesContinueOnLongLine(t *testing.T) {
 	}
 }
 
-func TestReadNewLinesStopOnLongLineByDefault(t *testing.T) {
+func TestReadNewLinesNoTailErrorOnLongLine(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "test.log")
 	content := strings.Repeat("y", 32) + "\nshort\n"
 	if err := os.WriteFile(logPath, []byte(content), 0644); err != nil {
@@ -89,17 +86,44 @@ func TestReadNewLinesStopOnLongLineByDefault(t *testing.T) {
 	options := normalizeTailerOptions(TailerOptions{MaxLineBytes: 16})
 	tailer := &fileTailer{
 		options: options,
-		lines:   make(chan *Line, 2),
-		errors:  make(chan Error, 2),
+		lines:   make(chan *Line, 3),
+		errors:  make(chan Error, 1),
 		done:    make(chan struct{}),
 	}
 
 	fw := &fileWithReader{file: f, reader: NewLineReaderWithMaxLineBytes(options.MaxLineBytes)}
-	tailErr := tailer.readNewLines(fw, logrus.New())
-	if tailErr == nil {
-		t.Fatal("readNewLines() expected error for oversized line, got nil")
+	if err := tailer.readNewLines(fw, logrus.New()); err != nil {
+		t.Fatalf("readNewLines() returned unexpected error: %v", err)
 	}
-	if tailErr.Type() != LineTooLong {
-		t.Fatalf("error type=%v, want %v", tailErr.Type(), LineTooLong)
+
+	select {
+	case gotLine := <-tailer.lines:
+		expectedTruncated := strings.Repeat("y", 16)
+		if gotLine.Line != expectedTruncated {
+			t.Fatalf("truncated line=%q, want %q", gotLine.Line, expectedTruncated)
+		}
+		if !gotLine.Truncated {
+			t.Fatal("expected truncated line to have Truncated=true")
+		}
+	default:
+		t.Fatal("expected truncated line, got none")
+	}
+
+	select {
+	case gotErr := <-tailer.errors:
+		t.Fatalf("unexpected error emitted: %v", gotErr)
+	default:
+	}
+
+	select {
+	case gotLine := <-tailer.lines:
+		if gotLine.Line != "short" {
+			t.Fatalf("line=%q, want %q", gotLine.Line, "short")
+		}
+		if gotLine.Truncated {
+			t.Fatal("expected normal line to have Truncated=false")
+		}
+	default:
+		t.Fatal("expected a line after skipping oversized line, got none")
 	}
 }
