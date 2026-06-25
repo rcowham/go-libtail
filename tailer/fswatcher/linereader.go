@@ -15,6 +15,7 @@
 package fswatcher
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -28,6 +29,8 @@ type lineReader struct {
 	maxLineBytes          int
 	discardingTooLongLine bool
 	overflow              []byte // data read but not yet used
+	reader                *bufio.Reader
+	source                io.Reader
 }
 
 type lineTooLongError struct {
@@ -66,10 +69,23 @@ func NewLineReaderWithMaxLineBytes(maxLineBytes int) *lineReader {
 // if eof is true, line is always "" and err always is nil.
 // if eof is false and err is nil, an empty line means that there actually was an empty line in the file.
 func (r *lineReader) ReadLine(file io.Reader) (string, bool, error) {
-	var readBuf = make([]byte, 4096)
+	if r.reader == nil || r.source != file {
+		if r.reader != nil {
+			// Preserve bytes already buffered in bufio.Reader before re-binding to a new source.
+			if n := r.reader.Buffered(); n > 0 {
+				if pending, err := r.reader.Peek(n); err == nil {
+					copyPending := append([]byte(nil), pending...)
+					r.overflow = append(r.overflow, copyPending...)
+				}
+			}
+		}
+		r.reader = bufio.NewReaderSize(file, 4096)
+		r.source = file
+	}
+
 	for {
 		if r.discardingTooLongLine {
-			eof, err := r.discardUntilNewline(file)
+			eof, err := r.discardUntilNewline()
 			if err != nil {
 				return "", false, err
 			}
@@ -87,93 +103,35 @@ func (r *lineReader) ReadLine(file io.Reader) (string, bool, error) {
 			return string(stripWindowsLineEnding(result)), false, nil
 		}
 
-		// First, try to use any buffered overflow data
-		if len(r.overflow) > 0 {
-			n := len(r.overflow)
-			if newlinePos := bytes.IndexByte(r.overflow, '\n'); newlinePos >= 0 {
-				needed := newlinePos + 1
-				if r.pos+needed > r.maxLineBytes {
-					r.discardingTooLongLine = true
-					fitBytes := r.maxLineBytes - r.pos
-					if fitBytes > 0 {
-						copy(r.buf[r.pos:], r.overflow[:fitBytes])
-						r.pos += fitBytes
-					}
-					r.overflow = r.overflow[fitBytes:]
-					truncated := string(stripWindowsLineEnding(r.buf[:r.pos]))
-					return truncated, false, lineTooLongError{lineBytes: r.pos + len(r.overflow), maxLineBytes: r.maxLineBytes}
-				}
-				copy(r.buf[r.pos:], r.overflow[:needed])
-				r.pos += needed
-				r.overflow = r.overflow[needed:]
-				continue
-			}
-			if r.pos+n > r.maxLineBytes {
+		chunk, err := r.readChunk()
+		if len(chunk) > 0 {
+			lineBytes := r.pos + len(chunk)
+			if lineBytes > r.maxLineBytes {
 				r.discardingTooLongLine = true
 				fitBytes := r.maxLineBytes - r.pos
 				if fitBytes > 0 {
-					copy(r.buf[r.pos:], r.overflow[:fitBytes])
+					copy(r.buf[r.pos:], chunk[:fitBytes])
 					r.pos += fitBytes
 				}
-				r.overflow = r.overflow[fitBytes:]
-				// Return truncated line with error
+				r.overflow = append(r.overflow[:0], chunk[fitBytes:]...)
 				truncated := string(stripWindowsLineEnding(r.buf[:r.pos]))
-				return truncated, false, lineTooLongError{lineBytes: r.pos + len(r.overflow), maxLineBytes: r.maxLineBytes}
+				return truncated, false, lineTooLongError{lineBytes: lineBytes, maxLineBytes: r.maxLineBytes}
 			}
-			copy(r.buf[r.pos:], r.overflow)
-			r.pos += n
-			r.overflow = nil
-		} else {
-			n, err := file.Read(readBuf)
-			if n > 0 {
-				if newlinePos := bytes.IndexByte(readBuf[:n], '\n'); newlinePos >= 0 {
-					needed := newlinePos + 1
-					if r.pos+needed > r.maxLineBytes {
-						r.discardingTooLongLine = true
-						fitBytes := r.maxLineBytes - r.pos
-						if fitBytes > 0 {
-							copy(r.buf[r.pos:], readBuf[:fitBytes])
-							r.pos += fitBytes
-						}
-						r.overflow = append(r.overflow, readBuf[fitBytes:n]...)
-						truncated := string(stripWindowsLineEnding(r.buf[:r.pos]))
-						return truncated, false, lineTooLongError{lineBytes: r.pos + len(r.overflow), maxLineBytes: r.maxLineBytes}
-					}
-					copy(r.buf[r.pos:], readBuf[:needed])
-					r.pos += needed
-					if needed < n {
-						r.overflow = append(r.overflow, readBuf[needed:n]...)
-					}
-					continue
-				}
-				if r.pos+n > r.maxLineBytes {
-					r.discardingTooLongLine = true
-					fitBytes := r.maxLineBytes - r.pos
-					if fitBytes > 0 {
-						copy(r.buf[r.pos:], readBuf[:fitBytes])
-						r.pos += fitBytes
-					}
-					r.overflow = append(r.overflow, readBuf[fitBytes:n]...)
-					// Return truncated line with error
-					truncated := string(stripWindowsLineEnding(r.buf[:r.pos]))
-					return truncated, false, lineTooLongError{lineBytes: r.pos + len(r.overflow), maxLineBytes: r.maxLineBytes}
-				}
-				copy(r.buf[r.pos:], readBuf[:n])
-				r.pos += n
+			copy(r.buf[r.pos:], chunk)
+			r.pos += len(chunk)
+			continue
+		}
+
+		if err != nil {
+			if err == io.EOF {
+				return "", true, nil
 			}
-			if err != nil {
-				if err == io.EOF {
-					return "", true, nil
-				}
-				return "", false, err
-			}
+			return "", false, err
 		}
 	}
 }
 
-func (r *lineReader) discardUntilNewline(file io.Reader) (bool, error) {
-	readBuf := make([]byte, 4096)
-
+func (r *lineReader) discardUntilNewline() (bool, error) {
 	for {
 		// Look for newline in current buffer
 		newlinePos := bytes.IndexByte(r.buf[:r.pos], '\n')
@@ -190,65 +148,62 @@ func (r *lineReader) discardUntilNewline(file io.Reader) (bool, error) {
 			newlineInOverflow := bytes.IndexByte(r.overflow, '\n')
 			if newlineInOverflow >= 0 {
 				// Found newline in overflow, keep all data after it split between buf and overflow.
-				postNewline := r.overflow[newlineInOverflow+1:]
-				r.pos = 0
-				if len(postNewline) > 0 {
-					copySize := len(postNewline)
-					if copySize > r.maxLineBytes {
-						copySize = r.maxLineBytes
-					}
-					copy(r.buf, postNewline[:copySize])
-					r.pos = copySize
-					if copySize < len(postNewline) {
-						r.overflow = append(r.overflow[:0], postNewline[copySize:]...)
-					} else {
-						r.overflow = nil
-					}
-				} else {
-					r.overflow = nil
-				}
+				r.setBufferFromBytes(r.overflow[newlineInOverflow+1:])
 				r.discardingTooLongLine = false
 				return false, nil
 			}
-			// No newline in overflow, need to read more
+			// No newline in overflow; discard all of it and continue scanning source.
+			r.overflow = nil
 		}
 
-		// Read more data
-		n, err := file.Read(readBuf)
-		if n > 0 {
-			// Look for newline in new data
-			newlineInRead := bytes.IndexByte(readBuf[:n], '\n')
-			if newlineInRead >= 0 {
-				// Found newline, keep all data after it split between buf and overflow.
-				postNewline := readBuf[newlineInRead+1 : n]
-				r.pos = 0
-				if len(postNewline) > 0 {
-					copySize := len(postNewline)
-					if copySize > r.maxLineBytes {
-						copySize = r.maxLineBytes
-					}
-					copy(r.buf, postNewline[:copySize])
-					r.pos = copySize
-					if copySize < len(postNewline) {
-						r.overflow = append(r.overflow[:0], postNewline[copySize:]...)
-					} else {
-						r.overflow = nil
-					}
-				} else {
-					r.overflow = nil
-				}
+		chunk, err := r.readChunk()
+		if len(chunk) > 0 {
+			newlineInChunk := bytes.IndexByte(chunk, '\n')
+			if newlineInChunk >= 0 {
+				r.setBufferFromBytes(chunk[newlineInChunk+1:])
 				r.discardingTooLongLine = false
 				return false, nil
 			}
-			// No newline yet, append to overflow and continue
-			r.overflow = append(r.overflow, readBuf[:n]...)
 		}
+
 		if err != nil {
 			if err == io.EOF {
 				return true, nil
 			}
 			return false, err
 		}
+	}
+}
+
+func (r *lineReader) readChunk() ([]byte, error) {
+	if len(r.overflow) > 0 {
+		chunk := r.overflow
+		r.overflow = nil
+		return chunk, nil
+	}
+
+	chunk, err := r.reader.ReadSlice('\n')
+	if err == bufio.ErrBufferFull {
+		return chunk, nil
+	}
+	return chunk, err
+}
+
+func (r *lineReader) setBufferFromBytes(data []byte) {
+	r.pos = 0
+	r.overflow = nil
+	if len(data) == 0 {
+		return
+	}
+
+	copySize := len(data)
+	if copySize > r.maxLineBytes {
+		copySize = r.maxLineBytes
+	}
+	copy(r.buf, data[:copySize])
+	r.pos = copySize
+	if copySize < len(data) {
+		r.overflow = append(r.overflow[:0], data[copySize:]...)
 	}
 }
 
@@ -264,4 +219,6 @@ func (r *lineReader) Clear() {
 	r.pos = 0
 	r.overflow = nil
 	r.discardingTooLongLine = false
+	r.reader = nil
+	r.source = nil
 }
