@@ -90,6 +90,24 @@ func (r *lineReader) ReadLine(file io.Reader) (string, bool, error) {
 		// First, try to use any buffered overflow data
 		if len(r.overflow) > 0 {
 			n := len(r.overflow)
+			if newlinePos := bytes.IndexByte(r.overflow, '\n'); newlinePos >= 0 {
+				needed := newlinePos + 1
+				if r.pos+needed > r.maxLineBytes {
+					r.discardingTooLongLine = true
+					fitBytes := r.maxLineBytes - r.pos
+					if fitBytes > 0 {
+						copy(r.buf[r.pos:], r.overflow[:fitBytes])
+						r.pos += fitBytes
+					}
+					r.overflow = r.overflow[fitBytes:]
+					truncated := string(stripWindowsLineEnding(r.buf[:r.pos]))
+					return truncated, false, lineTooLongError{lineBytes: r.pos + len(r.overflow), maxLineBytes: r.maxLineBytes}
+				}
+				copy(r.buf[r.pos:], r.overflow[:needed])
+				r.pos += needed
+				r.overflow = r.overflow[needed:]
+				continue
+			}
 			if r.pos+n > r.maxLineBytes {
 				r.discardingTooLongLine = true
 				fitBytes := r.maxLineBytes - r.pos
@@ -108,6 +126,26 @@ func (r *lineReader) ReadLine(file io.Reader) (string, bool, error) {
 		} else {
 			n, err := file.Read(readBuf)
 			if n > 0 {
+				if newlinePos := bytes.IndexByte(readBuf[:n], '\n'); newlinePos >= 0 {
+					needed := newlinePos + 1
+					if r.pos+needed > r.maxLineBytes {
+						r.discardingTooLongLine = true
+						fitBytes := r.maxLineBytes - r.pos
+						if fitBytes > 0 {
+							copy(r.buf[r.pos:], readBuf[:fitBytes])
+							r.pos += fitBytes
+						}
+						r.overflow = append(r.overflow, readBuf[fitBytes:n]...)
+						truncated := string(stripWindowsLineEnding(r.buf[:r.pos]))
+						return truncated, false, lineTooLongError{lineBytes: r.pos + len(r.overflow), maxLineBytes: r.maxLineBytes}
+					}
+					copy(r.buf[r.pos:], readBuf[:needed])
+					r.pos += needed
+					if needed < n {
+						r.overflow = append(r.overflow, readBuf[needed:n]...)
+					}
+					continue
+				}
 				if r.pos+n > r.maxLineBytes {
 					r.discardingTooLongLine = true
 					fitBytes := r.maxLineBytes - r.pos
@@ -151,16 +189,24 @@ func (r *lineReader) discardUntilNewline(file io.Reader) (bool, error) {
 		if len(r.overflow) > 0 {
 			newlineInOverflow := bytes.IndexByte(r.overflow, '\n')
 			if newlineInOverflow >= 0 {
-				// Found newline in overflow, keep only data after it
-				copySize := len(r.overflow) - newlineInOverflow - 1
-				if copySize > 0 && copySize <= r.maxLineBytes {
-					r.pos = 0
-					copy(r.buf, r.overflow[newlineInOverflow+1:])
+				// Found newline in overflow, keep all data after it split between buf and overflow.
+				postNewline := r.overflow[newlineInOverflow+1:]
+				r.pos = 0
+				if len(postNewline) > 0 {
+					copySize := len(postNewline)
+					if copySize > r.maxLineBytes {
+						copySize = r.maxLineBytes
+					}
+					copy(r.buf, postNewline[:copySize])
 					r.pos = copySize
+					if copySize < len(postNewline) {
+						r.overflow = append(r.overflow[:0], postNewline[copySize:]...)
+					} else {
+						r.overflow = nil
+					}
 				} else {
-					r.pos = 0
+					r.overflow = nil
 				}
-				r.overflow = nil
 				r.discardingTooLongLine = false
 				return false, nil
 			}
@@ -173,16 +219,24 @@ func (r *lineReader) discardUntilNewline(file io.Reader) (bool, error) {
 			// Look for newline in new data
 			newlineInRead := bytes.IndexByte(readBuf[:n], '\n')
 			if newlineInRead >= 0 {
-				// Found newline, keep only data after it
-				copySize := n - newlineInRead - 1
-				if copySize > 0 && copySize <= r.maxLineBytes {
-					r.pos = 0
-					copy(r.buf, readBuf[newlineInRead+1:n])
+				// Found newline, keep all data after it split between buf and overflow.
+				postNewline := readBuf[newlineInRead+1 : n]
+				r.pos = 0
+				if len(postNewline) > 0 {
+					copySize := len(postNewline)
+					if copySize > r.maxLineBytes {
+						copySize = r.maxLineBytes
+					}
+					copy(r.buf, postNewline[:copySize])
 					r.pos = copySize
+					if copySize < len(postNewline) {
+						r.overflow = append(r.overflow[:0], postNewline[copySize:]...)
+					} else {
+						r.overflow = nil
+					}
 				} else {
-					r.pos = 0
+					r.overflow = nil
 				}
-				r.overflow = nil
 				r.discardingTooLongLine = false
 				return false, nil
 			}

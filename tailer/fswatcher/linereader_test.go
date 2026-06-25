@@ -15,6 +15,7 @@
 package fswatcher
 
 import (
+	"io"
 	"strings"
 	"testing"
 )
@@ -85,5 +86,76 @@ func TestReadLineSkipsOversizedLineOnNextCall(t *testing.T) {
 	}
 	if line != "ok" {
 		t.Fatalf("second ReadLine() returned %q, expected %q", line, "ok")
+	}
+}
+
+func TestReadLineRespectsNewlineBeforeMaxAcrossLargeRead(t *testing.T) {
+	r := NewLineReaderWithMaxLineBytes(100)
+	input := strings.Join([]string{
+		"Perforce server info:",
+		"\t2020/01/11 02:00:02 pid 25396 p4sdp@p4poke-chi 127.0.0.1 [p4/2019.2.PREP-TEST_ONLY/LINUX26X86_64/1891638] 'user-serverid'",
+		"Perforce server info:",
+		"\t2020/01/11 02:00:02 pid 25390 completed .008s 0+0us 0+8io 0+0net 7632k 0pf",
+	}, "\n") + "\n"
+	reader := strings.NewReader(input)
+
+	line, eof, err := r.ReadLine(reader)
+	if err != nil {
+		t.Fatalf("first ReadLine() returned unexpected error: %v", err)
+	}
+	if eof {
+		t.Fatal("first ReadLine() unexpectedly returned eof=true")
+	}
+	if line != "Perforce server info:" {
+		t.Fatalf("first ReadLine() returned %q", line)
+	}
+
+	line, eof, err = r.ReadLine(reader)
+	if err == nil {
+		t.Fatal("second ReadLine() expected lineTooLongError, got nil")
+	}
+	if _, ok := err.(lineTooLongError); !ok {
+		t.Fatalf("second ReadLine() returned wrong error type: %T", err)
+	}
+	if eof {
+		t.Fatal("second ReadLine() unexpectedly returned eof=true")
+	}
+	if !strings.HasPrefix(line, "\t2020/01/11 02:00:02 pid 25396") {
+		t.Fatalf("second ReadLine() returned unexpected truncated content: %q", line)
+	}
+
+	line, eof, err = r.ReadLine(reader)
+	if err != nil {
+		t.Fatalf("third ReadLine() returned unexpected error: %v", err)
+	}
+	if eof {
+		t.Fatal("third ReadLine() unexpectedly returned eof=true")
+	}
+	if line != "Perforce server info:" {
+		t.Fatalf("third ReadLine() returned %q", line)
+	}
+
+	line, eof, err = r.ReadLine(reader)
+	if err != nil {
+		t.Fatalf("fourth ReadLine() returned unexpected error: %v", err)
+	}
+	if eof {
+		t.Fatal("fourth ReadLine() unexpectedly returned eof=true")
+	}
+	if line != "\t2020/01/11 02:00:02 pid 25390 completed .008s 0+0us 0+8io 0+0net 7632k 0pf" {
+		t.Fatalf("fourth ReadLine() returned %q", line)
+	}
+
+	line, eof, err = r.ReadLine(reader)
+	if err != nil {
+		t.Fatalf("final ReadLine() returned unexpected error: %v", err)
+	}
+	if !eof {
+		t.Fatalf("final ReadLine() eof=false, line=%q", line)
+	}
+
+	_, _, err = r.ReadLine(reader)
+	if err != nil && err != io.EOF {
+		t.Fatalf("extra ReadLine() returned unexpected error: %v", err)
 	}
 }

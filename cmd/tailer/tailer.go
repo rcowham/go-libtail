@@ -18,6 +18,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/rcowham/go-libtail/tailer"
@@ -35,6 +36,7 @@ var (
 	onlyTruncatedLines      = flag.Bool("only-truncated-lines", false, "Process/print only truncated lines (requires -continue-on-long-line).")
 	maxLines                = flag.Int("max-lines", 0, "Exit after processing this many output lines. 0 means unlimited.")
 	noOutput                = flag.Bool("no-output", false, "Do not print lines; useful for throughput testing.")
+	decodeEscapedSequences  = flag.Bool("decode-escaped-sequences", true, "Decode escaped \\n and \\t sequences in output lines.")
 )
 
 type myConfig struct {
@@ -49,6 +51,7 @@ type myConfig struct {
 	OnlyTruncatedLines   bool
 	MaxLines             int
 	NoOutput             bool
+	DecodeEscapedSeqs    bool
 }
 
 func main() {
@@ -66,6 +69,7 @@ func main() {
 		OnlyTruncatedLines:   *onlyTruncatedLines,
 		MaxLines:             *maxLines,
 		NoOutput:             *noOutput,
+		DecodeEscapedSeqs:    *decodeEscapedSequences,
 	}
 
 	tail, err := startTailer(cfg)
@@ -97,7 +101,7 @@ func main() {
 			}
 			processed++
 			if !cfg.NoOutput {
-				fmt.Fprintf(os.Stdout, "%v\n", line.Line)
+				fmt.Fprintf(os.Stdout, "%v\n", formatOutputLine(line.Line, cfg.DecodeEscapedSeqs))
 			}
 			if cfg.MaxLines > 0 && processed >= cfg.MaxLines {
 				tail.Close()
@@ -145,4 +149,13 @@ func startTailer(cfgInput *myConfig) (fswatcher.FileTailer, error) {
 		return nil, fmt.Errorf("Config error: Input type '%v' unknown.", cfgInput.Type)
 	}
 	return tail, nil
+}
+
+func formatOutputLine(line string, decodeEscapedSeqs bool) string {
+	if !decodeEscapedSeqs {
+		return line
+	}
+	line = strings.ReplaceAll(line, `\n`, "\n")
+	line = strings.ReplaceAll(line, `\t`, "\t")
+	return line
 }
