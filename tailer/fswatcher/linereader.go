@@ -22,6 +22,7 @@ import (
 )
 
 const defaultMaxLineBytes = 1024 * 1024
+const defaultReadBufferSize = 32 * 1024
 
 type lineReader struct {
 	buf                   []byte
@@ -31,6 +32,7 @@ type lineReader struct {
 	overflow              []byte // data read but not yet used
 	reader                *bufio.Reader
 	source                io.Reader
+	readBufferSize        int
 }
 
 type lineTooLongError struct {
@@ -44,9 +46,10 @@ func (e lineTooLongError) Error() string {
 
 func NewLineReader() *lineReader {
 	return &lineReader{
-		buf:          make([]byte, defaultMaxLineBytes),
-		pos:          0,
-		maxLineBytes: defaultMaxLineBytes,
+		buf:            make([]byte, defaultMaxLineBytes),
+		pos:            0,
+		maxLineBytes:   defaultMaxLineBytes,
+		readBufferSize: defaultReadBufferSize,
 	}
 }
 
@@ -55,10 +58,19 @@ func NewLineReaderWithMaxLineBytes(maxLineBytes int) *lineReader {
 		maxLineBytes = defaultMaxLineBytes
 	}
 	return &lineReader{
-		buf:          make([]byte, maxLineBytes),
-		pos:          0,
-		maxLineBytes: maxLineBytes,
+		buf:            make([]byte, maxLineBytes),
+		pos:            0,
+		maxLineBytes:   maxLineBytes,
+		readBufferSize: defaultReadBufferSize,
 	}
+}
+
+func NewLineReaderWithOptions(maxLineBytes int, readBufferSize int) *lineReader {
+	r := NewLineReaderWithMaxLineBytes(maxLineBytes)
+	if readBufferSize > 0 {
+		r.readBufferSize = readBufferSize
+	}
+	return r
 }
 
 // read the next line from the file.
@@ -79,7 +91,7 @@ func (r *lineReader) ReadLine(file io.Reader) (string, bool, error) {
 				}
 			}
 		}
-		r.reader = bufio.NewReaderSize(file, 4096)
+		r.reader = bufio.NewReaderSize(file, r.readBufferSize)
 		r.source = file
 	}
 
